@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.Versioning;
 using Tesseract;
 
@@ -78,9 +79,32 @@ public class TesseractRunner
     [SupportedOSPlatform("linux")]
     [SupportedOSPlatform("windows")]
     public (string text, float confidence) PerformOcr(byte[] imageBytes, string language)
+        => PerformOcrAsync(imageBytes, language, CancellationToken.None).GetAwaiter().GetResult();
+
+    [SupportedOSPlatform("linux")]
+    [SupportedOSPlatform("windows")]
+    public async Task<(string text, float confidence)> PerformOcrAsync(byte[] imageBytes, string language, CancellationToken cancellationToken)
     {
         if (imageBytes == null || imageBytes.Length == 0)
             throw new ArgumentException("Image bytes are empty", nameof(imageBytes));
+
+        if (OperatingSystem.IsLinux())
+        {
+            // On Linux, prefer the CLI to avoid fragile native wrapper filename expectations across distros.
+            // We'll write to a temp file and invoke `tesseract` as an external process.
+            var tempDir = Path.Combine(Path.GetTempPath(), "ocrserver-tesseract", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+            var tempImg = Path.Combine(tempDir, "input.png");
+            try
+            {
+                await File.WriteAllBytesAsync(tempImg, imageBytes, cancellationToken);
+                return await PerformOcrFileAsync(tempImg, language, cancellationToken);
+            }
+            finally
+            {
+                TryDeleteDirectory(tempDir);
+            }
+        }
 
         try
         {
@@ -128,6 +152,11 @@ public class TesseractRunner
     [SupportedOSPlatform("linux")]
     [SupportedOSPlatform("windows")]
     public (string text, float confidence) PerformOcrFile(string imagePath, string language)
+        => PerformOcrFileAsync(imagePath, language, CancellationToken.None).GetAwaiter().GetResult();
+
+    [SupportedOSPlatform("linux")]
+    [SupportedOSPlatform("windows")]
+    public async Task<(string text, float confidence)> PerformOcrFileAsync(string imagePath, string language, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(imagePath))
             throw new ArgumentException("Image path is required", nameof(imagePath));
@@ -135,16 +164,127 @@ public class TesseractRunner
         if (!File.Exists(imagePath))
             throw new FileNotFoundException("Image file not found", imagePath);
 
-        using var engine = new TesseractEngine(_tessdataPath, language, EngineMode.LstmOnly);
-        engine.SetVariable("tessedit_char_whitelist", "");
-        engine.SetVariable("preserve_interword_spaces", "1");
+        if (OperatingSystem.IsLinux())
+        {
+            // Linux: call `tesseract` CLI for maximum compatibility with distro packaging.
+            // Confidence is not available from plain-text output; we return 0.0 for now.
+            var result = await RunTesseractCliAsync(imagePath, language, dpi: 300, cancellationToken);
+            return (result, 0.0f);
+        }
 
-        using var pix = Pix.LoadFromFile(imagePath);
-        using var page = engine.Process(pix);
+        return await Task.Run(() =>
+        {
+            using var engine = new TesseractEngine(_tessdataPath, language, EngineMode.LstmOnly);
+            engine.SetVariable("tessedit_char_whitelist", "");
+            engine.SetVariable("preserve_interword_spaces", "1");
 
-        string text = page.GetText();
-        float confidence = page.GetMeanConfidence() / 100.0f;
+            using var pix = Pix.LoadFromFile(imagePath);
+            using var page = engine.Process(pix);
 
-        return (text, confidence);
+            string text = page.GetText();
+            float confidence = page.GetMeanConfidence() / 100.0f;
+
+            return (text, confidence);
+        }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Linux-only: runs `tesseract` external process and returns extracted text.
+    /// </summary>
+    private async Task<string> RunTesseractCliAsync(string imagePath, string language, int dpi, CancellationToken cancellationToken)
+    {
+        var args = new List<string>
+        {
+            Quote(imagePath),
+            "stdout",
+            "-l", language,
+            "--dpi", dpi.ToString()
+        };
+
+        // If we have a valid tessdata directory (bundled or configured), pass it explicitly.
+        if (Directory.Exists(_tessdataPath))
+        {
+            args.Add("--tessdata-dir");
+            args.Add(Quote(_tessdataPath));
+        }
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = "tesseract",
+            Arguments = string.Join(' ', args),
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+
+        using var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
+        try
+        {
+            if (!proc.Start())
+                throw new InvalidOperationException("Failed to start tesseract process.");
+        }
+        catch (Win32Exception ex)
+        {
+            throw new InvalidOperationException(
+                "tesseract CLI was not found. Install it (Ubuntu/Debian: `sudo apt-get install -y tesseract-ocr`).",
+                ex);
+        }
+
+        var stdoutTask = proc.StandardOutput.ReadToEndAsync(cancellationToken);
+        var stderrTask = proc.StandardError.ReadToEndAsync(cancellationToken);
+
+        try
+        {
+            await proc.WaitForExitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            TryKill(proc);
+            throw;
+        }
+
+        var stdout = await stdoutTask;
+        var stderr = await stderrTask;
+
+        if (proc.ExitCode != 0)
+        {
+            var hint = Directory.Exists(_tessdataPath)
+                ? $"Verify language data exists under `{_tessdataPath}` (e.g. `{language}.traineddata`)."
+                : "Verify tessdata is installed and/or set `Ocr:TesseractDataPath` to a folder containing .traineddata files.";
+
+            throw new InvalidOperationException($"tesseract failed with exit code {proc.ExitCode}. {hint} stderr: {Trim(stderr)}");
+        }
+
+        return stdout ?? "";
+    }
+
+    private static string Quote(string s) => s.Contains(' ') ? $"\"{s}\"" : s;
+
+    private static void TryKill(Process proc)
+    {
+        try
+        {
+            if (!proc.HasExited)
+                proc.Kill(entireProcessTree: true);
+        }
+        catch { }
+    }
+
+    private static void TryDeleteDirectory(string dir)
+    {
+        try
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, recursive: true);
+        }
+        catch { }
+    }
+
+    private static string Trim(string s)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return "";
+        s = s.Trim();
+        return s.Length > 2000 ? s[..2000] + "…" : s;
     }
 }

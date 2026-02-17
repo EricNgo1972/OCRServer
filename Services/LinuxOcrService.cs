@@ -71,12 +71,11 @@ public sealed class LinuxOcrService : IOcrService
                 await Parallel.ForEachAsync(
                     Enumerable.Range(0, paths.Length),
                     opts,
-                    (i, ct) =>
+                    async (i, ct) =>
                     {
                         ct.ThrowIfCancellationRequested();
-                        var r = _tesseractRunner.PerformOcrFile(paths[i], request.Language);
+                        var r = await _tesseractRunner.PerformOcrFileAsync(paths[i], request.Language, ct);
                         results[i] = r;
-                        return ValueTask.CompletedTask;
                     });
 
                 for (int i = 0; i < results.Length; i++)
@@ -94,7 +93,7 @@ public sealed class LinuxOcrService : IOcrService
             {
                 _logger.LogInformation("Processing image file (Linux direct Tesseract): {FileName}", request.File.FileName);
                 cancellationToken.ThrowIfCancellationRequested();
-                var result = _tesseractRunner.PerformOcr(fileBytes, request.Language);
+                var result = await _tesseractRunner.PerformOcrAsync(fileBytes, request.Language, cancellationToken);
                 pages.Add(new PageResult { Page = 1, Text = result.text });
                 confidences.Add(result.confidence);
             }

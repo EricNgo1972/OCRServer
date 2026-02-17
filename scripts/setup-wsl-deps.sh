@@ -12,7 +12,7 @@ fi
 sudo apt-get update
 # Linux pipeline is intentionally boring/stable:
 # PDF -> pdftoppm (poppler-utils) -> Tesseract (libtesseract/leptonica)
-sudo apt-get install -y poppler-utils libtesseract-dev libleptonica-dev
+sudo apt-get install -y poppler-utils tesseract-ocr libtesseract-dev libleptonica-dev
 
 # Ubuntu 24.04+ ships Tesseract 5 (libtesseract.so.5). Tesseract .NET may look for libtesseract.so.4.
 TESS_LIB=$(ldconfig -p 2>/dev/null | awk '/libtesseract\.so/ { print $NF; exit }')
