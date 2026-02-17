@@ -98,6 +98,97 @@ Install language packs as needed:
 
 **Tessdata Location**: `/usr/share/tesseract-ocr/5/tessdata` (configure in `appsettings.json`)
 
+## Running in WSL
+
+On Linux/WSL, the OCR pipeline is intentionally **boring and stable**:
+
+- PDF → `pdftoppm` (Poppler) at **300 DPI**, grayscale
+- Image → Tesseract directly
+
+No OpenCV and no PDFium are used on the Linux OCR path.
+
+**Note:** Building a *solution* with `-r linux-x64` is not supported (error NETSDK1134). Build the *project* instead: run **`.\scripts\build-wsl.ps1`** or **`dotnet build OCRServer.csproj -r linux-x64`**.
+
+### WSL: install system libraries first
+
+In WSL (Ubuntu/Debian), install these **before** running the app so `pdftoppm` and `libtesseract.so.4` can load. From the project root in WSL:
+
+```bash
+bash scripts/setup-wsl-deps.sh
+```
+
+Or install manually:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y \
+  poppler-utils \
+  libtesseract-dev \
+  libleptonica-dev \
+  tesseract-ocr
+```
+
+- **poppler-utils**: provides `pdftoppm` (PDF → per-page images).
+- **libtesseract-dev** / **libleptonica-dev**: required by the Tesseract .NET library. On Ubuntu 24.04+ (Tesseract 5.x), the setup script creates a `libtesseract.so.4` symlink for compatibility.
+- Language packs (`tesseract-ocr-eng`, etc.) are optional if you use bundled tessdata in the app folder.
+
+### Option A: Run from Windows (Cursor / VS Code)
+
+1. **Build for Linux and run in WSL** using the script (recommended):
+   ```powershell
+   .\scripts\run-wsl.ps1
+   ```
+2. Or use **Run and Debug** → select **"OCR Server (WSL)"** → F5. This builds for `linux-x64` and starts the app inside WSL.
+3. Or run the task: **Terminal → Run Task → "run in WSL"**.
+
+### Option B: Run from inside WSL
+
+1. Open a **WSL terminal** and go to the project folder (e.g. `cd "/mnt/c/Business Solutions/OCR Server"`).
+2. Restore and run (the build will target `linux-x64` automatically):
+   ```bash
+   dotnet restore
+   dotnet run
+   ```
+
+### Option C: Open project in WSL (best for debugging in WSL)
+
+1. In Cursor/VS Code: **Remote: Open Folder in WSL** and open this repo (e.g. `\\wsl$\Ubuntu\home\...` or the path under `/mnt/c/...`).
+2. Then **Run → Start Debugging** or `dotnet run` from the terminal. Build and run both happen in WSL with the correct Linux binaries.
+
+### Option D: Visual Studio 2022
+
+The solution only has **Debug** and **Release** (SDK-style projects don't support extra configurations). To run in WSL from VS 2022:
+
+1. **Build for Linux first**: Open **Developer PowerShell** or a terminal in the solution folder and run:
+   ```powershell
+   dotnet build OCRServer.csproj -r linux-x64
+   ```
+2. In **Visual Studio 2022**, set the **launch profile** to **WSL** (dropdown next to the green Run button).
+3. Press **F5**. Use **Run Without Debugging** (Ctrl+F5) so VS doesn't rebuild; it will use the existing `bin\Debug\net8.0\linux-x64\` output and run it in WSL with the correct native libraries.
+
+Alternatively, run **`.\scripts\run-wsl.ps1`** from the project folder to build for linux-x64 and start the app in WSL in one step.
+
+## Troubleshooting
+
+### "pdftoppm: command not found" or "libtesseract.so.4: cannot open shared object file" (WSL / Linux)
+
+You are using the **linux-x64** build but the **system libraries** are missing. In WSL (or your Linux distro), install them (see **WSL: install system libraries first** under Running in WSL):
+
+```bash
+sudo apt-get install -y poppler-utils libtesseract-dev libleptonica-dev
+```
+
+Then rebuild if needed and run again. On Ubuntu 24.04+, run **`bash scripts/setup-wsl-deps.sh`** once so it can create a `libtesseract.so.4` symlink (the system ships `libtesseract.so.5`).
+
+### "The type initializer for 'OpenCvSharp.Internal.NativeMethods' threw an exception" or "Unable to load shared library 'pdfium'"
+
+You are running the **wrong build** for the current environment:
+
+- **If you're in WSL (or using the WSL launch profile):** The process must use the **Linux** build (`linux-x64`). Do **not** run the contents of `bin/Debug/net8.0/win-x64/` in WSL. Instead:
+  1. Build for Linux: `dotnet build OCRServer.csproj -r linux-x64`
+  2. Run from a WSL shell: `dotnet bin/Debug/net8.0/linux-x64/OCRServer.dll` (from the project folder), or use **Run Without Debugging** (Ctrl+F5) with the WSL profile after building with the command above so VS doesn't rebuild.
+- **If you're on Windows:** Use the **Windows** build. The project is set up to build `win-x64` by default on Windows, so output is in `bin\Debug\net8.0\win-x64\`. Do a clean rebuild: `dotnet clean` then `dotnet build`, and run from Visual Studio (http/https profile) or `dotnet run`. Ensure you're not pointing the run at a `linux-x64` folder.
+
 ## Building
 
 ```bash

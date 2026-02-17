@@ -1,7 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Threading;
-
 using OpenCvSharp;
 
 using PDFiumCore;
@@ -12,21 +8,29 @@ namespace OCRServer.Services
 {
     public sealed class PdfiumPdfRenderer : IPdfRenderer
     {
+        private static int _initialized;
+
+        private static void EnsurePdfiumInitialized()
+        {
+            // PDFium is process-wide; initialize once.
+            if (Interlocked.Exchange(ref _initialized, 1) == 0)
+                FPDF_InitLibrary();
+        }
+
         public IReadOnlyList<Mat> RenderPdf(byte[] pdfBytes, int dpi, CancellationToken ct)
         {
             var mats = new List<Mat>();
 
-            FPDF_InitLibrary();
+            EnsurePdfiumInitialized();
 
             unsafe
             {
                 fixed (byte* data = pdfBytes)
                 {
-                    // typed handle (your IntelliSense shows this)
-                    FpdfDocument doc = FPDF_LoadMemDocument((nint)data, pdfBytes.Length, null);
+                    FpdfDocumentT doc = FPDF_LoadMemDocument((IntPtr)data, pdfBytes.Length, null);
 
                     // null/empty handle check for struct-like handles
-                    if (doc.Equals(default(FpdfDocument)))
+                    if (doc.Equals(default(FpdfDocumentT)))
                         throw new InvalidOperationException("Failed to load PDF document");
 
                     int pageCount = FPDF_GetPageCount(doc);
@@ -35,8 +39,8 @@ namespace OCRServer.Services
                     {
                         ct.ThrowIfCancellationRequested();
 
-                        FpdfPage page = FPDF_LoadPage(doc, i);
-                        if (page.Equals(default(FpdfPage)))
+                        FpdfPageT page = FPDF_LoadPage(doc, i);
+                        if (page.Equals(default(FpdfPageT)))
                             continue;
 
                         double pageWidth = FPDF_GetPageWidth(page);
@@ -45,15 +49,15 @@ namespace OCRServer.Services
                         int width = (int)(pageWidth * dpi / 72.0);
                         int height = (int)(pageHeight * dpi / 72.0);
 
-                        FpdfBitmap bitmap = FPDFBitmap_Create(width, height, 1);
-                        if (bitmap.Equals(default(FpdfBitmap)))
+                        FpdfBitmapT bitmap = FPDFBitmapCreate(width, height, 1);
+                        if (bitmap.Equals(default(FpdfBitmapT)))
                         {
                             FPDF_ClosePage(page);
                             continue;
                         }
 
                         // white background
-                        FPDFBitmap_FillRect(bitmap, 0, 0, width, height, 0xFFFFFFFF);
+                        FPDFBitmapFillRect(bitmap, 0, 0, width, height, 0xFFFFFFFFu);
 
                         FPDF_RenderPageBitmap(
                             bitmap,
@@ -61,21 +65,21 @@ namespace OCRServer.Services
                             0, 0,
                             width, height,
                             0,
-                            FPDF_ANNOT
+                            (int)RenderFlags.RenderAnnotations
                         );
 
-                        nint buffer = FPDFBitmap_GetBuffer(bitmap);
-                        int stride = FPDFBitmap_GetStride(bitmap);
+                        IntPtr buffer = FPDFBitmapGetBuffer(bitmap);
+                        int stride = FPDFBitmapGetStride(bitmap);
 
                         // Important: OpenCvSharp Mat ctor expects IntPtr, so cast nint -> IntPtr
-                        using var bgra = new Mat(height, width, MatType.CV_8UC4, (IntPtr)buffer, stride);
+                        using var bgra = new Mat(height, width, MatType.CV_8UC4, buffer, stride);
 
                         var bgr = new Mat();
                         Cv2.CvtColor(bgra, bgr, ColorConversionCodes.BGRA2BGR);
 
                         mats.Add(bgr);
 
-                        FPDFBitmap_Destroy(bitmap);
+                        FPDFBitmapDestroy(bitmap);
                         FPDF_ClosePage(page);
                     }
 

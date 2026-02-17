@@ -1,9 +1,8 @@
 using OCRServer.Models;
-using OCRServer.Processing;
 using OCRServer.Ocr;
+using OCRServer.Processing;
+
 using OpenCvSharp;
-using System.Diagnostics;
-using System.Drawing.Imaging;
 
 namespace OCRServer.Services;
 
@@ -12,19 +11,26 @@ namespace OCRServer.Services;
 /// Handles PDF conversion, image preprocessing, and OCR execution
 /// Stateless and thread-safe
 /// </summary>
-public class OcrService : IOcrService
+/// <summary>
+/// Windows OCR implementation (PDFium + OpenCV preprocessing + Tesseract).
+/// Linux should NOT use this path.
+/// </summary>
+public class WindowsOcrService : IOcrService
 {
     private readonly ImagePreprocessor _preprocessor;
     private readonly TesseractRunner _tesseractRunner;
-    private readonly ILogger<OcrService> _logger;
+    private readonly IPdfRenderer _pdfRenderer;
+    private readonly ILogger<WindowsOcrService> _logger;
 
-    public OcrService(
+    public WindowsOcrService(
         ImagePreprocessor preprocessor,
         TesseractRunner tesseractRunner,
-        ILogger<OcrService> logger)
+        IPdfRenderer pdfRenderer,
+        ILogger<WindowsOcrService> logger)
     {
         _preprocessor = preprocessor;
         _tesseractRunner = tesseractRunner;
+        _pdfRenderer = pdfRenderer;
         _logger = logger;
     }
 
@@ -39,6 +45,7 @@ public class OcrService : IOcrService
 
             // Validate language
             ValidateLanguage(request.Language);
+            request.Language = NormalizeLanguage(request.Language);
 
             // Read file content
             byte[] fileBytes;
@@ -99,7 +106,7 @@ public class OcrService : IOcrService
         }
     }
 
-    private async Task<List<(string text, float confidence)>> ProcessPdfAsync(byte[] pdfBytes, string language, ProcessingProfile profile, CancellationToken cancellationToken)
+    private Task<List<(string text, float confidence)>> ProcessPdfAsync(byte[] pdfBytes, string language, ProcessingProfile profile, CancellationToken cancellationToken)
     {
         var results = new List<(string text, float confidence)>();
 
@@ -118,12 +125,37 @@ public class OcrService : IOcrService
                 using var processed = _preprocessor.Preprocess(pageMat, profile);
 
                 // OCR
-                var result = _tesseractRunner.PerformOcr(processed, language);
+                Cv2.ImEncode(".png", processed, out var encoded);
+                var result = _tesseractRunner.PerformOcr(encoded, language);
                 results.Add(result);
             }
         }
 
-        return results;
+        return Task.FromResult(results);
+    }
+
+    private string NormalizeLanguage(string language)
+    {
+        // The API docs encourage Tesseract codes (eng, vie, etc.), but callers often pass names.
+        // Normalize a few common ones so local testing "just works".
+        static string MapOne(string part)
+        {
+            var p = part.Trim().ToLowerInvariant();
+
+            return p switch
+            {
+                "english" or "en" or "en-us" or "en_us" => "eng",
+                "french" or "fr" or "fr-fr" or "fr_fr" => "fra",
+                "vietnamese" or "vi" or "vi-vn" or "vi_vn" => "vie",
+                _ => p
+            };
+        }
+
+        var parts = language
+            .Split('+', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(MapOne);
+
+        return string.Join('+', parts);
     }
 
 
@@ -155,7 +187,8 @@ public class OcrService : IOcrService
                 processed = _preprocessor.Preprocess(image, profile);
 
                 // Perform OCR
-                var result = _tesseractRunner.PerformOcr(processed, language);
+                Cv2.ImEncode(".png", processed, out var encoded);
+                var result = _tesseractRunner.PerformOcr(encoded, language);
 
                 return result;
             }

@@ -8,11 +8,19 @@
     <UserSecretsId>0d8acca9-e545-4431-9f93-2d5146c2e5c7</UserSecretsId>
     <NoWarn>$(NoWarn);CA1416</NoWarn>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-	  
+    <!-- Use platform-specific RID so native runtimes (OpenCvSharp, PDFium) are copied. -->
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == '' and '$(OS)' == 'Windows_NT'">win-x64</RuntimeIdentifier>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == '' and '$(OS)' != 'Windows_NT'">linux-x64</RuntimeIdentifier>
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Bundle Tesseract language data: copy tessdata folder to output so the app works without system install -->
+    <Content Include="tessdata\**\*" CopyToOutputDirectory="PreserveNewest" LinkBase="tessdata" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="OpenCvSharp4" Version="4.9.0.20240103" />
+    <PackageReference Include="OpenCvSharp4.runtime.win" Version="4.9.0.20240103" />
+    <PackageReference Include="OpenCvSharp4.runtime.linux-x64" Version="4.9.0.20240103" />
     <PackageReference Include="PDFiumCore" Version="146.0.7678.1" />
     <PackageReference Include="Tesseract" Version="5.2.0" />
     <PackageReference Include="System.Drawing.Common" Version="8.0.0" />

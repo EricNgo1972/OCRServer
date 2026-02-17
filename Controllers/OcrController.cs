@@ -14,11 +14,13 @@ public class OcrController : ControllerBase
 {
     private readonly IOcrService _ocrService;
     private readonly ILogger<OcrController> _logger;
+    private readonly IHostEnvironment _env;
 
-    public OcrController(IOcrService ocrService, ILogger<OcrController> logger)
+    public OcrController(IOcrService ocrService, ILogger<OcrController> logger, IHostEnvironment env)
     {
         _ocrService = ocrService;
         _logger = logger;
+        _env = env;
     }
 
     /// <summary>
@@ -79,6 +81,12 @@ public class OcrController : ControllerBase
         catch (Exception ex)
         {
             _logger.LogError(ex, "OCR processing failed: {FileName}", file.FileName);
+
+            // In Development, let the global exception handler return the real error message
+            // (helps with diagnosing missing tessdata, PDF rendering, native library issues, etc.).
+            if (_env.IsDevelopment())
+                throw;
+
             return StatusCode(500, new { error = "OCR processing failed. Please check the logs for details." });
         }
     }
