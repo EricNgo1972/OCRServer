@@ -170,6 +170,57 @@ Alternatively, run **`.\scripts\run-wsl.ps1`** from the project folder to build 
 
 ## Troubleshooting
 
+## Internal security (API keys, rate limiting, concurrency)
+
+This is an internal service, but OCR is expensive. The request pipeline is protected in this order:
+
+Request → **API Key** → **Rate limit (per key)** → **Concurrency limit (per key)** → **Validation (size/pages)** → OCR
+
+### API Key header (mandatory)
+
+Every OCR request must include:
+
+- `X-API-Key: <key>`
+
+Missing key → **401**  
+Invalid key → **403**
+
+### Configuration
+
+Configure API keys and limits in `appsettings.json` (loaded once at startup, stored in-memory):
+
+```json
+{
+  "OcrLimits": {
+    "MaxUploadBytes": 20971520,
+    "MaxPdfPages": 30
+  },
+  "ApiKeys": {
+    "warehouse-app": {
+      "Key": "abc123",
+      "RequestsPerMinute": 30,
+      "MaxConcurrent": 2
+    },
+    "finance-app": {
+      "Key": "xyz789",
+      "RequestsPerMinute": 10,
+      "MaxConcurrent": 1
+    }
+  }
+}
+```
+
+### Rejection behavior
+
+- **429 Too Many Requests**: rate limit exceeded OR concurrency limit exceeded (no queuing)
+- **413 Payload Too Large**: file too large OR PDF has too many pages
+
+### Logging
+
+Every OCR request produces one log line like:
+
+`OCR | client=warehouse-app | pages=4 | size=2.3MB | ms=1820 | status=200 | ok`
+
 ### "pdftoppm: command not found" or "libtesseract.so.4: cannot open shared object file" (WSL / Linux)
 
 You are using the **linux-x64** build but the **system libraries** are missing. In WSL (or your Linux distro), install them (see **WSL: install system libraries first** under Running in WSL):

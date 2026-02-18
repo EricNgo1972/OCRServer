@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using OCRServer.Models;
 using OCRServer.Services;
 using System.ComponentModel.DataAnnotations;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace OCRServer.Controllers;
 
@@ -31,6 +32,7 @@ public class OcrController : ControllerBase
     /// <param name="profile">Optional preprocessing profile: "scan", "photo", or "fast"</param>
     /// <returns>OCR results with extracted text and confidence scores</returns>
     [HttpPost]
+    [EnableRateLimiting("ocr")]
     [ProducesResponseType(typeof(OcrResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status500InternalServerError)]
