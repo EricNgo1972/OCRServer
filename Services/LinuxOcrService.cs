@@ -5,20 +5,23 @@ namespace OCRServer.Services;
 
 /// <summary>
 /// Linux OCR implementation:
-/// PDF -> pdftoppm (300 DPI grayscale) -> Tesseract
+/// PDF -> try pdftotext (text layer) -> if meaningful text: return; else pdftoppm -> Tesseract
 /// Image -> Tesseract (no OpenCV preprocessing)
 /// </summary>
 public sealed class LinuxOcrService : IOcrService
 {
+    private readonly PdfTextExtractor _pdfTextExtractor;
     private readonly PdftoppmPdfRenderer _pdfRenderer;
     private readonly TesseractRunner _tesseractRunner;
     private readonly ILogger<LinuxOcrService> _logger;
 
     public LinuxOcrService(
+        PdfTextExtractor pdfTextExtractor,
         PdftoppmPdfRenderer pdfRenderer,
         TesseractRunner tesseractRunner,
         ILogger<LinuxOcrService> logger)
     {
+        _pdfTextExtractor = pdfTextExtractor;
         _pdfRenderer = pdfRenderer;
         _tesseractRunner = tesseractRunner;
         _logger = logger;
@@ -54,6 +57,31 @@ public sealed class LinuxOcrService : IOcrService
 
             if (contentType.Contains("pdf") || fileName.EndsWith(".pdf"))
             {
+                // Try embedded text first; skip OCR if meaningful text is present
+                var extractedText = await _pdfTextExtractor.TryExtractPdfTextAsync(fileBytes, cancellationToken);
+                if (!string.IsNullOrWhiteSpace(extractedText))
+                {
+                    var textPages = extractedText.Split('\f').Select(p => p.Trim()).Where(p => p.Length > 0).ToArray();
+                    if (textPages.Length == 0)
+                        textPages = new[] { extractedText.Trim() };
+
+                    for (int i = 0; i < textPages.Length; i++)
+                        pages.Add(new PageResult { Page = i + 1, Text = textPages[i] });
+
+                    stopwatch.Stop();
+                    _logger.LogInformation("PDF text layer used (no OCR): {FileName}, {PageCount} page(s)", request.File.FileName, pages.Count);
+
+                    return new OcrResponse
+                    {
+                        Engine = "pdf-text-layer",
+                        Language = request.Language,
+                        Profile = request.Profile ?? "scan",
+                        Confidence = 1.0,
+                        Pages = pages,
+                        ProcessingMs = stopwatch.ElapsedMilliseconds
+                    };
+                }
+
                 _logger.LogInformation("Processing PDF file (Linux pdftoppm pipeline): {FileName}", request.File.FileName);
 
                 await using var rendered = await _pdfRenderer.RenderToGrayImagesAsync(fileBytes, dpi: 300, cancellationToken);
@@ -65,7 +93,7 @@ public sealed class LinuxOcrService : IOcrService
                 var opts = new ParallelOptions
                 {
                     CancellationToken = cancellationToken,
-                    MaxDegreeOfParallelism = Math.Clamp(Environment.ProcessorCount, 1, 4)
+                    MaxDegreeOfParallelism = 1//Math.Clamp(Environment.ProcessorCount, 1, 4)
                 };
 
                 await Parallel.ForEachAsync(

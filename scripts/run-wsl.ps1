@@ -1,9 +1,10 @@
 # Build for Linux (linux-x64) then run the app inside WSL.
 # Use this when you want to run/debug in WSL from a Windows project folder.
-# The app will load Linux native libs (libpdfium.so, OpenCvSharp) correctly.
+# Linux pipeline: pdftotext / pdftoppm + Tesseract (no OpenCV, no PDFium).
 #
-# If you see "OpenCvSharpExtern.so" or "libtesseract.so.4" not found, install WSL deps once:
+# If you see "pdftoppm" or "tesseract" or "libtesseract.so.4" not found, install WSL deps once:
 #   wsl -e bash -c "cd '/mnt/c/Business Solutions/OCR Server' && bash scripts/setup-wsl-deps.sh"
+
 $ErrorActionPreference = "Stop"
 $projectRoot = $PSScriptRoot | Split-Path -Parent
 Push-Location $projectRoot
@@ -12,10 +13,6 @@ try {
     Write-Host "Building for linux-x64..." -ForegroundColor Cyan
     dotnet build .\OCRServer.csproj -r linux-x64 --no-incremental
     if ($LASTEXITCODE -ne 0) { throw "Build failed." }
-
-    $outDir = Join-Path $projectRoot "bin\Debug\net8.0\linux-x64"
-
-    # Linux pipeline no longer relies on OpenCvSharp; no extra native copying is required here.
 
     # Convert Windows path to WSL path (e.g. C:\foo\bar -> /mnt/c/foo/bar)
     $winPath = (Get-Location).Path

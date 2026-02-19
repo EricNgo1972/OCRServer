@@ -46,7 +46,8 @@ builder.Services.AddRateLimiter(options =>
 // Register OCR services
 if (OperatingSystem.IsLinux())
 {
-    // Linux: boring/stable pipeline (PDF -> pdftoppm -> Tesseract). No OpenCV/PDFium usage.
+    // Linux: try pdf text layer (pdftotext) then fallback to pdftoppm -> Tesseract. No OpenCV/PDFium.
+    builder.Services.AddSingleton<PdfTextExtractor>();
     builder.Services.AddSingleton<IOcrService, LinuxOcrService>();
     builder.Services.AddSingleton<PdftoppmPdfRenderer>();
 }
@@ -85,5 +86,34 @@ app.UseMiddleware<OcrConcurrencyLimiterMiddleware>();
 app.UseMiddleware<OcrRequestValidationMiddleware>();
 app.UseAuthorization();
 app.MapControllers();
+
+// Root path = health check + usage instructions (no API key required)
+app.MapGet("/", () =>
+{
+    var instructions = """
+        OCR service is running.
+
+        How to use
+        ----------
+        POST /api/ocr  (multipart/form-data)
+
+        Headers:
+          X-API-Key: <your-api-key>   (required)
+
+        Form fields:
+          file      (required)  PDF, PNG, or JPG file
+          language  (required)  Tesseract code(s), e.g. eng, eng+fra, eng+vie
+          profile   (optional)  scan | photo | fast  (default: scan)
+
+        Example (curl):
+          curl -X POST https://localhost:5001/api/Ocr \\
+            -H "X-API-Key: your-key" \\
+            -F "file=@document.pdf" \\
+            -F "language=eng"
+
+        Health check: GET /  (this page)
+        """;
+    return Results.Text(instructions.Trim(), "text/plain");
+});
 
 app.Run();
