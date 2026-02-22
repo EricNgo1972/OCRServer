@@ -87,33 +87,171 @@ app.UseMiddleware<OcrRequestValidationMiddleware>();
 app.UseAuthorization();
 app.MapControllers();
 
-// Root path = health check + usage instructions (no API key required)
+//// Root path = health check + usage instructions (no API key required)
+//app.MapGet("/", () =>
+//{
+//    var instructions = """
+//        OCR service is running.
+
+//        How to use
+//        ----------
+//        POST /api/ocr  (multipart/form-data)
+
+//        Headers:
+//          X-API-Key: <your-api-key>   (required)
+
+//        Form fields:
+//          file      (required)  PDF, PNG, or JPG file
+//          language  (required)  Tesseract code(s), e.g. eng, eng+fra, eng+vie
+//          profile   (optional)  scan | photo | fast  (default: scan)
+
+//        Example (curl):
+//          curl -X POST https://localhost:5001/api/Ocr \\
+//            -H "X-API-Key: your-key" \\
+//            -F "file=@document.pdf" \\
+//            -F "language=eng"
+
+//        Health check: GET /  (this page)
+//        """;
+//    return Results.Text(instructions.Trim(), "text/plain");
+//});
+
 app.MapGet("/", () =>
 {
-    var instructions = """
-        OCR service is running.
+    var html = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>OCR Service</title>
+<style>
+    :root {
+        --bg: #0b1220;
+        --panel: #111a2e;
+        --accent: #3cc8ff;
+        --warn: #ff9f43;
+        --text: #e6edf3;
+        --muted: #9aa4b2;
+        --code: #0a0f1c;
+    }
 
-        How to use
-        ----------
-        POST /api/ocr  (multipart/form-data)
+    body {
+        margin: 0;
+        padding: 40px;
+        font-family: Inter, Segoe UI, Roboto, sans-serif;
+        background: linear-gradient(180deg, #0b1220, #070b14);
+        color: var(--text);
+    }
 
-        Headers:
-          X-API-Key: <your-api-key>   (required)
+    h1 {
+        color: var(--accent);
+        margin-bottom: 8px;
+    }
 
-        Form fields:
-          file      (required)  PDF, PNG, or JPG file
-          language  (required)  Tesseract code(s), e.g. eng, eng+fra, eng+vie
-          profile   (optional)  scan | photo | fast  (default: scan)
+    h2 {
+        margin-top: 40px;
+        color: var(--accent);
+        font-size: 1.2rem;
+    }
 
-        Example (curl):
-          curl -X POST https://localhost:5001/api/Ocr \\
-            -H "X-API-Key: your-key" \\
-            -F "file=@document.pdf" \\
-            -F "language=eng"
+    .status {
+        margin-bottom: 24px;
+        color: var(--muted);
+    }
 
-        Health check: GET /  (this page)
-        """;
-    return Results.Text(instructions.Trim(), "text/plain");
+    .box {
+        background: var(--panel);
+        border-left: 4px solid var(--accent);
+        padding: 16px 20px;
+        margin: 16px 0;
+        border-radius: 6px;
+    }
+
+    .warn {
+        border-left-color: var(--warn);
+    }
+
+    pre {
+        background: var(--code);
+        padding: 14px 16px;
+        border-radius: 6px;
+        overflow-x: auto;
+        font-size: 0.9rem;
+    }
+
+    code {
+        color: #d7e3ff;
+    }
+
+    .kv {
+        line-height: 1.6;
+    }
+
+    .muted {
+        color: var(--muted);
+    }
+</style>
+</head>
+<body>
+
+<h1>OCR Service</h1>
+<div class="status">
+    Status: <b>Running</b><br />
+    Engine: <b>Tesseract OCR</b><br />
+    Supported files: <b>PDF, PNG, JPG</b>
+</div>
+
+<div class="box warn">
+    <b>Authentication Required</b><br />
+    All OCR requests must include the HTTP header:
+    <pre>X-API-Key: &lt;your-api-key&gt;</pre>
+</div>
+
+<h2>Endpoint</h2>
+<pre>POST /api/ocr</pre>
+
+<h2>Required Headers</h2>
+<pre>
+Content-Type: multipart/form-data
+X-API-Key: &lt;your-api-key&gt;
+</pre>
+
+<h2>Form Fields</h2>
+<div class="box">
+    <div class="kv">
+        <b>file</b> <span class="muted">(required)</span><br />
+        PDF, PNG, or JPG file
+        <br /><br />
+
+        <b>language</b> <span class="muted">(required)</span><br />
+        Tesseract language codes (e.g. <code>eng</code>, <code>eng+fra</code>, <code>eng+vie</code>)
+        <br /><br />
+
+        <b>profile</b> <span class="muted">(optional)</span><br />
+        scan | photo | fast &nbsp; <span class="muted">(default: scan)</span>
+    </div>
+</div>
+
+<h2>Example (curl)</h2>
+<pre>
+curl -X POST https://ocr.phoebus.asia/api/ocr \
+  -H "X-API-Key: your-api-key" \
+  -F "file=@document.pdf" \
+  -F "language=eng"
+</pre>
+
+<h2>Health Check</h2>
+<pre>GET /</pre>
+
+<div class="muted">
+    Returns this page. No API key required.
+</div>
+
+</body>
+</html>
+""";
+
+    return Results.Text(html, "text/html");
 });
 
 app.Run();
