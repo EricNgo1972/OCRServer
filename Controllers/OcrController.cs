@@ -1,7 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using OCRServer.Models;
 using OCRServer.Services;
-using System.ComponentModel.DataAnnotations;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace OCRServer.Controllers;
 
@@ -13,12 +13,18 @@ namespace OCRServer.Controllers;
 public class OcrController : ControllerBase
 {
     private readonly IOcrService _ocrService;
+    private readonly ISearchablePdfService _searchablePdfService;
     private readonly ILogger<OcrController> _logger;
     private readonly IHostEnvironment _env;
 
-    public OcrController(IOcrService ocrService, ILogger<OcrController> logger, IHostEnvironment env)
+    public OcrController(
+        IOcrService ocrService,
+        ISearchablePdfService searchablePdfService,
+        ILogger<OcrController> logger,
+        IHostEnvironment env)
     {
         _ocrService = ocrService;
+        _searchablePdfService = searchablePdfService;
         _logger = logger;
         _env = env;
     }
@@ -26,19 +32,16 @@ public class OcrController : ControllerBase
     /// <summary>
     /// Performs OCR on uploaded image or PDF
     /// </summary>
-    /// <param name="file">Image file (PNG, JPG) or PDF</param>
-    /// <param name="language">Tesseract language code(s), e.g., "eng", "eng+fra", "eng+vie"</param>
-    /// <param name="profile">Optional preprocessing profile: "scan", "photo", or "fast"</param>
+    /// <param name="request">Multipart form-data body containing file, language, and profile</param>
     /// <returns>OCR results with extracted text and confidence scores</returns>
     [HttpPost]
+    [EnableRateLimiting("ocr")]
     [ProducesResponseType(typeof(OcrResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status500InternalServerError)]
-    public async Task<ActionResult<OcrResponse>> ProcessOcr(
-        [Required] IFormFile file,
-        [Required] string language,
-        string? profile = null)
+    public async Task<ActionResult<OcrResponse>> ProcessOcr([FromForm] OcrRequest request)
     {
+        var file = request.File;
         if (file == null || file.Length == 0)
         {
             return BadRequest(new { error = "File is required and must not be empty" });
@@ -53,12 +56,9 @@ public class OcrController : ControllerBase
 
         try
         {
-            var request = new OcrRequest
-            {
-                File = file,
-                Language = language,
-                Profile = profile
-            };
+            request.Language = string.IsNullOrWhiteSpace(request.Language)
+                ? OcrRequest.DefaultLanguage
+                : request.Language;
 
             var response = await _ocrService.ProcessAsync(request);
 
@@ -88,6 +88,64 @@ public class OcrController : ControllerBase
                 throw;
 
             return StatusCode(500, new { error = "OCR processing failed. Please check the logs for details." });
+        }
+    }
+
+    /// <summary>
+    /// Creates a searchable PDF from an uploaded PDF.
+    /// </summary>
+    [HttpPost("pdf")]
+    [EnableRateLimiting("ocr")]
+    [Produces("application/pdf")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+    public async Task<IActionResult> CreateSearchablePdf([FromForm] OcrRequest request)
+    {
+        var file = request.File;
+        if (file == null || file.Length == 0)
+            return BadRequest(new { error = "File is required and must not be empty" });
+
+        if (!file.FileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) &&
+            !file.ContentType.Contains("pdf", StringComparison.OrdinalIgnoreCase))
+        {
+            return BadRequest(new { error = "The searchable PDF endpoint only accepts PDF files." });
+        }
+
+        try
+        {
+            request.Language = string.IsNullOrWhiteSpace(request.Language)
+                ? OcrRequest.DefaultLanguage
+                : request.Language;
+
+            var result = await _searchablePdfService.CreateAsync(request, HttpContext.RequestAborted);
+
+            _logger.LogInformation(
+                "Searchable PDF completed: {FileName}, pages={PageCount}, alreadySearchable={AlreadySearchable}",
+                file.FileName,
+                result.PageCount,
+                result.WasAlreadySearchable);
+
+            return File(result.PdfBytes, "application/pdf", result.FileName);
+        }
+        catch (ArgumentException ex)
+        {
+            _logger.LogWarning(ex, "Invalid searchable PDF request: {FileName}", file.FileName);
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (NotSupportedException ex)
+        {
+            _logger.LogWarning(ex, "Unsupported searchable PDF operation: {FileName}", file.FileName);
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Searchable PDF processing failed: {FileName}", file.FileName);
+
+            if (_env.IsDevelopment())
+                throw;
+
+            return StatusCode(500, new { error = "Searchable PDF processing failed. Please check the logs for details." });
         }
     }
 }

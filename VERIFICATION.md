@@ -7,12 +7,16 @@
 - [x] OpenCV via OpenCvSharp
 - [x] Tesseract OCR (native, offline, LSTM mode)
 - [x] No database (stateless)
-- [x] No UI
+- [x] Minimal operational UI (dashboard + Swagger)
 - [x] CPU-only (no GPU dependency)
 
 ## API Design ✅
 
 - [x] POST /api/ocr endpoint
+- [x] GET /dashboard endpoint
+- [x] GET /dashboard/stats endpoint
+- [x] GET / redirects to /dashboard
+- [x] Swagger UI exposed at /swagger
 - [x] multipart/form-data input
 - [x] file field (PDF, PNG, JPG)
 - [x] language field (e.g., eng, eng+fra, eng+vie)

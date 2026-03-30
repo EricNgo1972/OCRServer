@@ -1,6 +1,6 @@
 # OCR Server
 
-Production-grade OCR microservice for ERP systems. Built with .NET 8, OpenCV, and Tesseract OCR.
+Production-grade OCR microservice for ERP systems. Built with .NET 8 and Tesseract OCR.
 
 ## Design Philosophy
 
@@ -12,30 +12,38 @@ Production-grade OCR microservice for ERP systems. Built with .NET 8, OpenCV, an
 ## Technology Stack
 
 - .NET 8 Web API
-- OpenCV (via OpenCvSharp) for image preprocessing
-- Tesseract OCR 5.x (LSTM mode, offline)
-- PdfiumSharp for PDF rendering
-- Linux-compatible, CPU-only
+- **Linux**: Poppler (`pdftoppm`) + Tesseract CLI — no OpenCV, no PDFium
+- **Windows**: PDFium + OpenCvSharp preprocessing + Tesseract
+- CPU-only, offline
 
 ## Features
 
-- **Image preprocessing pipeline**: Grayscale → CLAHE → Noise Reduction → Deskew → Adaptive Threshold
-- **Multilingual OCR**: Supports language combinations (e.g., `eng+vie`, `eng+fra`)
-- **PDF support**: Converts PDF pages to images automatically
-- **Processing profiles**: `scan`, `photo`, `fast`
+- **Multilingual OCR**: Language combinations (e.g. `eng+vie`, `eng+fra`)
+- **PDF support**: Renders PDF pages to images (pdftoppm on Linux, PDFium on Windows)
+- **Processing profiles** (Windows only): `scan`, `photo`, `fast`
+- **Internal security**: API key auth, per-key rate and concurrency limits, size/page validation
+- **Operations dashboard**: Public `/dashboard` page with live in-memory request totals
+- **Swagger UI**: Public `/swagger` page with `X-API-Key` header support for testing
 - **Stateless**: No database, no session state
-- **Error resilient**: Failures don't crash the service
 
 ## API Endpoint
 
-### POST /api/ocr
+Public utility routes:
+- `GET /` redirects to `/dashboard`
+- `GET /dashboard` shows request counters
+- `GET /dashboard/stats` returns the dashboard totals as JSON
+- `GET /swagger` opens the Swagger UI
+
+### POST /api/Ocr
+
+**Headers**: `X-API-Key: <key>` (required)
 
 **Content-Type**: `multipart/form-data`
 
-**Parameters**:
+**Form fields**:
 - `file` (required): PDF, PNG, or JPG file
-- `language` (required): Tesseract language code(s), e.g., `eng`, `eng+fra`, `eng+vie`
-- `profile` (optional): Preprocessing profile (`scan`, `photo`, `fast`). Default: `scan`
+- `language` (optional): Tesseract code(s), e.g. `eng`, `eng+fra`, `eng+vie`. Defaults to `eng+fra` when omitted
+- `profile` (optional): Preprocessing profile — `scan`, `photo`, `fast` (Windows only; default `scan`)
 
 **Response**:
 ```json
@@ -45,166 +53,227 @@ Production-grade OCR microservice for ERP systems. Built with .NET 8, OpenCV, an
   "profile": "scan",
   "confidence": 0.92,
   "pages": [
-    {
-      "page": 1,
-      "text": "INVOICE\nSố hóa đơn: 00123\n..."
-    }
+    { "page": 1, "text": "INVOICE\nSố hóa đơn: 00123\n..." }
   ],
   "processingMs": 640
 }
 ```
 
-## Linux Dependencies
+### POST /api/Ocr/pdf
 
-### Ubuntu/Debian
+Creates a searchable PDF from an uploaded PDF.
+
+**Headers**: `X-API-Key: <key>` (required)
+
+**Content-Type**: `multipart/form-data`
+
+**Form fields**:
+- `file` (required): PDF file
+- `language` (optional): Tesseract code(s), e.g. `eng`, `eng+fra`, `eng+vie`. Defaults to `eng+fra` when omitted
+- `profile` (optional): accepted for compatibility; ignored by searchable PDF generation
+
+**Response**:
+- `Content-Type: application/pdf`
+- body: binary PDF stream
+- filename: returned via `Content-Disposition`
+
+## Internal Security (API Keys, Rate Limiting, Concurrency)
+
+Request pipeline order:
+
+**Request → API Key → Rate limit (per key) → Concurrency limit (per key) → Validation (size/pages) → OCR**
+
+- **X-API-Key** header required. Missing → 401; Invalid → 403
+- **429 Too Many Requests**: rate or concurrency limit exceeded (no queuing)
+- **413 Payload Too Large**: file size or PDF page count exceeds limits
+
+Configure in `appsettings.json` (loaded once at startup):
+
+```json
+{
+  "OcrLimits": {
+    "MaxUploadBytes": 20971520,
+    "MaxPdfPages": 30
+  },
+  "ApiKeys": {
+    "warehouse-app": {
+      "Key": "abc123",
+      "RequestsPerMinute": 30,
+      "MaxConcurrent": 2
+    }
+  }
+}
+```
+
+Every OCR request is logged: `OCR | client=warehouse-app | pages=4 | size=2.3MB | ms=1820 | status=200 | ok`
+
+## Deployment
+
+This service has different runtime dependencies on Windows and Linux.
+
+- **Windows**:
+  - `/api/ocr` uses PDFium + OpenCvSharp + the .NET Tesseract wrapper
+  - `/api/ocr/pdf` uses `tesseract.exe` CLI to generate searchable PDFs
+- **Linux**:
+  - `/api/ocr` and `/api/ocr/pdf` use Poppler tools + Tesseract CLI
+
+### Windows Deployment
+
+Required components:
+
+- .NET 8 runtime or SDK
+- Tesseract language data (`tessdata/`) available either:
+  - bundled with the app output, or
+  - installed system-wide and configured via `Ocr:TesseractDataPath`
+- For `POST /api/ocr/pdf`: `tesseract.exe` must be installed and launchable by the app
+
+Recommended Tesseract install path:
+
+```text
+C:\Program Files\Tesseract-OCR\tesseract.exe
+```
+
+Build and run:
+
+```powershell
+dotnet restore
+dotnet build OCRServer.csproj -c Release
+dotnet run --project OCRServer.csproj
+```
+
+Quick verification:
+
+```powershell
+where.exe tesseract
+```
+
+If `where.exe tesseract` returns no path, `/api/ocr/pdf` will fail even if `/api/ocr` works.
+
+### Linux Deployment
+
+Required components:
+
+- .NET 8 runtime or SDK
+- `tesseract-ocr`
+- `poppler-utils`
+- `libtesseract-dev`
+- `libleptonica-dev`
+- optional system language packs if you are not using the bundled `tessdata/`
+
+Install on Ubuntu/Debian:
 
 ```bash
-# Install Tesseract OCR
 sudo apt-get update
-sudo apt-get install -y tesseract-ocr tesseract-ocr-eng tesseract-ocr-fra tesseract-ocr-vie
-
-# Install OpenCV dependencies
-sudo apt-get install -y libopencv-dev libgdiplus
-
-# Install Poppler (for PDF processing)
-sudo apt-get install -y poppler-utils
-
-# Install additional dependencies
-sudo apt-get install -y libc6-dev
+sudo apt-get install -y poppler-utils tesseract-ocr libtesseract-dev libleptonica-dev
 ```
 
-### CentOS/RHEL
-
-```bash
-# Install Tesseract OCR
-sudo yum install -y tesseract tesseract-langpack-eng tesseract-langpack-fra
-
-# Install OpenCV dependencies
-sudo yum install -y opencv-devel libgdiplus
-
-# Install Poppler (for PDF processing)
-sudo yum install -y poppler-utils
-```
-
-### Tesseract Language Packs
-
-Install language packs as needed:
-- `tesseract-ocr-eng` - English
-- `tesseract-ocr-fra` - French
-- `tesseract-ocr-vie` - Vietnamese
-- `tesseract-ocr-spa` - Spanish
-- `tesseract-ocr-deu` - German
-- See [Tesseract language packs](https://github.com/tesseract-ocr/tessdata) for full list
-
-**Tessdata Location**: `/usr/share/tesseract-ocr/5/tessdata` (configure in `appsettings.json`)
-
-## Running in WSL
-
-On Linux/WSL, the OCR pipeline is intentionally **boring and stable**:
-
-- PDF → `pdftoppm` (Poppler) at **300 DPI**, grayscale
-- Image → Tesseract directly
-
-No OpenCV and no PDFium are used on the Linux OCR path.
-
-**Note:** Building a *solution* with `-r linux-x64` is not supported (error NETSDK1134). Build the *project* instead: run **`.\scripts\build-wsl.ps1`** or **`dotnet build OCRServer.csproj -r linux-x64`**.
-
-### WSL: install system libraries first
-
-In WSL (Ubuntu/Debian), install these **before** running the app so `pdftoppm` and `libtesseract.so.4` can load. From the project root in WSL:
+Or from project root:
 
 ```bash
 bash scripts/setup-wsl-deps.sh
 ```
 
-Or install manually:
+What these provide:
+
+- `poppler-utils`: `pdftoppm`, `pdftotext`, `pdfinfo`
+- `tesseract-ocr`: Tesseract CLI used for OCR and searchable PDF generation
+- `libtesseract-dev` / `libleptonica-dev`: native runtime libraries required by the app
+
+Build and run:
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y \
-  poppler-utils \
-  libtesseract-dev \
-  libleptonica-dev \
-  tesseract-ocr
-```
-
-- **poppler-utils**: provides `pdftoppm` (PDF → per-page images).
-- **libtesseract-dev** / **libleptonica-dev**: required by the Tesseract .NET library. On Ubuntu 24.04+ (Tesseract 5.x), the setup script creates a `libtesseract.so.4` symlink for compatibility.
-- Language packs (`tesseract-ocr-eng`, etc.) are optional if you use bundled tessdata in the app folder.
-
-### Option A: Run from Windows (Cursor / VS Code)
-
-1. **Build for Linux and run in WSL** using the script (recommended):
-   ```powershell
-   .\scripts\run-wsl.ps1
-   ```
-2. Or use **Run and Debug** → select **"OCR Server (WSL)"** → F5. This builds for `linux-x64` and starts the app inside WSL.
-3. Or run the task: **Terminal → Run Task → "run in WSL"**.
-
-### Option B: Run from inside WSL
-
-1. Open a **WSL terminal** and go to the project folder (e.g. `cd "/mnt/c/Business Solutions/OCR Server"`).
-2. Restore and run (the build will target `linux-x64` automatically):
-   ```bash
-   dotnet restore
-   dotnet run
-   ```
-
-### Option C: Open project in WSL (best for debugging in WSL)
-
-1. In Cursor/VS Code: **Remote: Open Folder in WSL** and open this repo (e.g. `\\wsl$\Ubuntu\home\...` or the path under `/mnt/c/...`).
-2. Then **Run → Start Debugging** or `dotnet run` from the terminal. Build and run both happen in WSL with the correct Linux binaries.
-
-### Option D: Visual Studio 2022
-
-The solution only has **Debug** and **Release** (SDK-style projects don't support extra configurations). To run in WSL from VS 2022:
-
-1. **Build for Linux first**: Open **Developer PowerShell** or a terminal in the solution folder and run:
-   ```powershell
-   dotnet build OCRServer.csproj -r linux-x64
-   ```
-2. In **Visual Studio 2022**, set the **launch profile** to **WSL** (dropdown next to the green Run button).
-3. Press **F5**. Use **Run Without Debugging** (Ctrl+F5) so VS doesn't rebuild; it will use the existing `bin\Debug\net8.0\linux-x64\` output and run it in WSL with the correct native libraries.
-
-Alternatively, run **`.\scripts\run-wsl.ps1`** from the project folder to build for linux-x64 and start the app in WSL in one step.
-
-## Troubleshooting
-
-### "pdftoppm: command not found" or "libtesseract.so.4: cannot open shared object file" (WSL / Linux)
-
-You are using the **linux-x64** build but the **system libraries** are missing. In WSL (or your Linux distro), install them (see **WSL: install system libraries first** under Running in WSL):
-
-```bash
-sudo apt-get install -y poppler-utils libtesseract-dev libleptonica-dev
-```
-
-Then rebuild if needed and run again. On Ubuntu 24.04+, run **`bash scripts/setup-wsl-deps.sh`** once so it can create a `libtesseract.so.4` symlink (the system ships `libtesseract.so.5`).
-
-### "The type initializer for 'OpenCvSharp.Internal.NativeMethods' threw an exception" or "Unable to load shared library 'pdfium'"
-
-You are running the **wrong build** for the current environment:
-
-- **If you're in WSL (or using the WSL launch profile):** The process must use the **Linux** build (`linux-x64`). Do **not** run the contents of `bin/Debug/net8.0/win-x64/` in WSL. Instead:
-  1. Build for Linux: `dotnet build OCRServer.csproj -r linux-x64`
-  2. Run from a WSL shell: `dotnet bin/Debug/net8.0/linux-x64/OCRServer.dll` (from the project folder), or use **Run Without Debugging** (Ctrl+F5) with the WSL profile after building with the command above so VS doesn't rebuild.
-- **If you're on Windows:** Use the **Windows** build. The project is set up to build `win-x64` by default on Windows, so output is in `bin\Debug\net8.0\win-x64\`. Do a clean rebuild: `dotnet clean` then `dotnet build`, and run from Visual Studio (http/https profile) or `dotnet run`. Ensure you're not pointing the run at a `linux-x64` folder.
-
-## Building
-
-```bash
-# Restore dependencies
 dotnet restore
+dotnet build OCRServer.csproj -c Release -r linux-x64
+dotnet run --project OCRServer.csproj
+```
 
-# Build
-dotnet build --configuration Release
+Quick verification:
 
-# Run
+```bash
+which tesseract
+which pdftoppm
+which pdftotext
+which pdfinfo
+```
+
+### WSL Development
+
+On Linux/WSL the runtime pipeline is **pdftoppm → Tesseract CLI**.
+
+Run from Windows:
+
+```powershell
+.\scripts\run-wsl.ps1
+```
+
+Run from inside WSL:
+
+```bash
+cd "/mnt/c/Business Solutions/OCR Server"
 dotnet run
 ```
 
-## Docker Deployment
+Visual Studio 2022:
 
-### Dockerfile
+1. Build for Linux: `dotnet build OCRServer.csproj -r linux-x64`
+2. Set launch profile to **WSL**, then F5 (or Ctrl+F5 to avoid rebuild)
+
+## Configuration
+
+`appsettings.json`:
+
+```json
+{
+  "Ocr": {
+    "TesseractDataPath": "/usr/share/tesseract-ocr/5/tessdata",
+    "DefaultLanguage": "eng"
+  },
+  "OcrLimits": { "MaxUploadBytes": 20971520, "MaxPdfPages": 30 },
+  "ApiKeys": { ... }
+}
+```
+
+Use bundled tessdata by placing `.traineddata` files in the project `tessdata/` folder (copied to output).
+
+## Example Usage
+
+### cURL
+
+```bash
+curl -X POST http://localhost:5000/api/Ocr \
+  -H "X-API-Key: your-key" \
+  -F "file=@invoice.png" \
+  -F "language=eng+vie" \
+  -F "profile=scan"
+```
+
+### PowerShell
+
+```powershell
+$uri = "http://localhost:5000/api/Ocr"
+$form = @{
+    file = Get-Item "invoice.png"
+    language = "eng+vie"
+    profile = "scan"
+}
+$headers = @{ "X-API-Key" = "your-key" }
+Invoke-RestMethod -Uri $uri -Method Post -Form $form -Headers $headers
+```
+
+### Searchable PDF Download
+
+```powershell
+$uri = "http://localhost:5000/api/ocr/pdf"
+$form = @{
+    file = Get-Item "document.pdf"
+    language = "eng"
+}
+$headers = @{ "X-API-Key" = "your-key" }
+
+Invoke-WebRequest -Uri $uri -Method Post -Form $form -Headers $headers -OutFile "searchable.pdf"
+```
+
+## Docker (Linux target)
 
 ```dockerfile
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS base
@@ -212,9 +281,8 @@ WORKDIR /app
 EXPOSE 80
 EXPOSE 443
 
-# Install Tesseract and dependencies
 RUN apt-get update && \
-    apt-get install -y tesseract-ocr tesseract-ocr-eng tesseract-ocr-fra tesseract-ocr-vie libgdiplus && \
+    apt-get install -y poppler-utils tesseract-ocr tesseract-ocr-eng libtesseract-dev libleptonica-dev && \
     rm -rf /var/lib/apt/lists/*
 
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
@@ -222,11 +290,10 @@ WORKDIR /src
 COPY ["OCRServer.csproj", "./"]
 RUN dotnet restore "OCRServer.csproj"
 COPY . .
-WORKDIR "/src"
 RUN dotnet build "OCRServer.csproj" -c Release -o /app/build
 
 FROM build AS publish
-RUN dotnet publish "OCRServer.csproj" -c Release -o /app/publish
+RUN dotnet publish "OCRServer.csproj" -c Release -o /app/publish -r linux-x64 --self-contained false
 
 FROM base AS final
 WORKDIR /app
@@ -234,16 +301,14 @@ COPY --from=publish /app/publish .
 ENTRYPOINT ["dotnet", "OCRServer.dll"]
 ```
 
-### Build and Run
-
 ```bash
 docker build -t ocr-server .
-docker run -p 8080:80 ocr-server
+docker run -p 8080:80 -e ApiKeys__dev__Key=dev-key ocr-server
 ```
 
 ## Systemd Service
 
-Create `/etc/systemd/system/ocr-server.service`:
+Example `/etc/systemd/system/ocr-server.service`:
 
 ```ini
 [Unit]
@@ -264,132 +329,69 @@ Environment=ASPNETCORE_URLS=http://localhost:5000
 WantedBy=multi-user.target
 ```
 
-Enable and start:
 ```bash
 sudo systemctl enable ocr-server
 sudo systemctl start ocr-server
-sudo systemctl status ocr-server
 ```
-
-## Configuration
-
-Edit `appsettings.json`:
-
-```json
-{
-  "Ocr": {
-    "TesseractDataPath": "/usr/share/tesseract-ocr/5/tessdata",
-    "DefaultLanguage": "eng"
-  }
-}
-```
-
-## Example Usage
-
-### cURL
-
-```bash
-curl -X POST http://localhost:5000/api/ocr \
-  -F "file=@invoice.png" \
-  -F "language=eng+vie" \
-  -F "profile=scan"
-```
-
-### PowerShell
-
-```powershell
-$uri = "http://localhost:5000/api/ocr"
-$form = @{
-    file = Get-Item "invoice.png"
-    language = "eng+vie"
-    profile = "scan"
-}
-Invoke-RestMethod -Uri $uri -Method Post -Form $form
-```
-
-### C# Client
-
-```csharp
-using var client = new HttpClient();
-using var formData = new MultipartFormDataContent();
-formData.Add(new ByteArrayContent(File.ReadAllBytes("invoice.png")), "file", "invoice.png");
-formData.Add(new StringContent("eng+vie"), "language");
-formData.Add(new StringContent("scan"), "profile");
-
-var response = await client.PostAsync("http://localhost:5000/api/ocr", formData);
-var result = await response.Content.ReadFromJsonAsync<OcrResponse>();
-```
-
-## Processing Profiles
-
-- **scan**: Full preprocessing pipeline (CLAHE, noise reduction, deskew, adaptive threshold)
-- **photo**: Stronger contrast normalization + deskew (for camera-captured images)
-- **fast**: Minimal preprocessing (grayscale + basic threshold)
 
 ## Architecture
 
 ```
 /Controllers
-  OcrController.cs          # API endpoint
+  OcrController.cs              # POST /api/Ocr
 /Services
-  IOcrService.cs            # Service interface
-  OcrService.cs             # Main OCR orchestration
-/Processing
-  ImagePreprocessor.cs      # Preprocessing pipeline
-  DeskewHelper.cs           # Skew detection/correction
-/Ocr
-  TesseractRunner.cs        # Tesseract wrapper
-/Models
-  OcrRequest.cs             # Request model
-  OcrResponse.cs            # Response model
-  PageResult.cs             # Page result model
+  IOcrService.cs                # Service interface
+  WindowsOcrService.cs          # Windows: PDFium + OpenCV + Tesseract
+  LinuxOcrService.cs           # Linux: pdftoppm + Tesseract CLI
+  PdftoppmPdfRenderer.cs        # Linux PDF → images (pdftoppm)
+  PdfInfoPageCounter.cs         # PDF page count (pdfinfo)
+/Security
+  ApiKeyStore.cs                # API keys loaded at startup
 /Middleware
-  GlobalExceptionHandler.cs # Error handling
+  ApiKeyAuthenticationMiddleware.cs
+  OcrConcurrencyLimiterMiddleware.cs
+  OcrRequestValidationMiddleware.cs
+  OcrRequestAuditMiddleware.cs
+  GlobalExceptionHandler.cs
+/Ocr
+  TesseractRunner.cs            # Tesseract (CLI on Linux, wrapper on Windows)
+/Processing (Windows only)
+  ImagePreprocessor.cs, DeskewHelper.cs
+/Models
+  OcrRequest, OcrResponse, PageResult
 ```
-
-## Logging
-
-The service logs:
-- Processing time per request
-- File names and page counts
-- Confidence scores
-- Errors (without crashing)
-
-View logs:
-```bash
-# systemd
-journalctl -u ocr-server -f
-
-# Docker
-docker logs -f ocr-server
-```
-
-## Limitations
-
-- CPU-only (no GPU acceleration)
-- Offline only (no cloud APIs)
-- No document classification
-- No business logic
-- Stateless (no session management)
 
 ## Troubleshooting
 
-### Tesseract not found
-- Verify `TesseractDataPath` in `appsettings.json`
-- Check language packs are installed
-- Ensure tessdata files exist at configured path
+### "pdftoppm: command not found" or "tesseract: command not found" (Linux)
 
-### OpenCV errors
-- Install `libopencv-dev` and runtime packages
-- Verify OpenCvSharp NuGet package matches system OpenCV version
+Install Poppler and Tesseract: `sudo apt-get install -y poppler-utils tesseract-ocr libtesseract-dev libleptonica-dev`. On Ubuntu 24.04+, run `bash scripts/setup-wsl-deps.sh` to add the `libtesseract.so.4` symlink.
 
-### PDF processing fails
-- Ensure `poppler-utils` package is installed (`pdftoppm` command must be available)
-- Verify `pdftoppm` is in PATH: `which pdftoppm`
-- Check PDF file is not corrupted
-- Verify sufficient memory for large PDFs
-- Check temporary directory permissions (PDF conversion uses temp files)
+### "libtesseract.so.4: cannot open shared object file" (Linux)
+
+Install `libtesseract-dev` and `libleptonica-dev`. On Ubuntu 24.04+ (Tesseract 5.x), the setup script creates `libtesseract.so.4` → `libtesseract.so.5`.
+
+### Wrong build for environment
+
+- **WSL/Linux**: Use the **linux-x64** build. Do not run `win-x64` output in WSL. Build with `dotnet build OCRServer.csproj -r linux-x64`.
+- **Windows**: Use the default **win-x64** build (`dotnet build` / `dotnet run`).
+
+### Tesseract / tessdata
+
+- Set `Ocr:TesseractDataPath` in appsettings to a folder containing `.traineddata` files, or use the bundled `tessdata/` folder in the project.
+- Ensure the requested language (e.g. `eng`, `fra`) has a corresponding `.traineddata` file.
+
+### PDF processing (Linux)
+
+- `pdftoppm` and `pdfinfo` come from **poppler-utils**. Verify: `which pdftoppm pdfinfo`.
+- Ensure temp directory is writable (PDF conversion uses temp files).
+
+## Limitations
+
+- CPU-only (no GPU)
+- Offline only (no cloud APIs)
+- Stateless (no session management)
 
 ## License
 
-Infrastructure service - no license restrictions specified.
+Infrastructure service — no license restrictions specified.

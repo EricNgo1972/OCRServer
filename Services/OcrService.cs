@@ -40,6 +40,10 @@ public class WindowsOcrService : IOcrService
 
         try
         {
+            request.Language = string.IsNullOrWhiteSpace(request.Language)
+                ? OcrRequest.DefaultLanguage
+                : request.Language;
+
             // Parse profile
             ProcessingProfile profile = ParseProfile(request.Profile);
 
@@ -136,6 +140,8 @@ public class WindowsOcrService : IOcrService
 
     private string NormalizeLanguage(string language)
     {
+        language = System.Text.RegularExpressions.Regex.Replace(language, @"[\s,;|/\\]+", "+");
+
         // The API docs encourage Tesseract codes (eng, vie, etc.), but callers often pass names.
         // Normalize a few common ones so local testing "just works".
         static string MapOne(string part)

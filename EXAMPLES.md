@@ -11,6 +11,8 @@ curl -X POST http://localhost:5000/api/ocr \
   -F "profile=scan"
 ```
 
+If `language` is omitted from the multipart form body, the API defaults to `eng+fra`.
+
 ### PowerShell
 
 ```powershell
@@ -76,6 +78,82 @@ for page in result['pages']:
     print(f"Page {page['page']}: {page['text'][:100]}...")
 ```
 
+## Searchable PDF Request
+
+### cURL
+
+```bash
+curl -X POST http://localhost:5000/api/ocr/pdf \
+  -H "X-API-Key: your-key" \
+  -F "file=@document.pdf" \
+  -F "language=eng" \
+  --output searchable.pdf
+```
+
+### PowerShell
+
+```powershell
+$uri = "http://localhost:5000/api/ocr/pdf"
+$form = @{
+    file = Get-Item "document.pdf"
+    language = "eng"
+}
+$headers = @{ "X-API-Key" = "your-key" }
+
+Invoke-WebRequest -Uri $uri -Method Post -Form $form -Headers $headers -OutFile "searchable.pdf"
+```
+
+### C# Client
+
+```csharp
+var client = new HttpClient();
+client.DefaultRequestHeaders.Add("X-API-Key", "your-key");
+
+using var formData = new MultipartFormDataContent();
+formData.Add(new StreamContent(File.OpenRead("document.pdf")), "file", "document.pdf");
+formData.Add(new StringContent("eng"), "language");
+
+using var response = await client.PostAsync("http://localhost:5000/api/ocr/pdf", formData);
+response.EnsureSuccessStatusCode();
+
+await using var output = File.Create("searchable.pdf");
+await response.Content.CopyToAsync(output);
+```
+
+### JavaScript (browser)
+
+```javascript
+const form = new FormData();
+form.append("file", fileInput.files[0]);
+form.append("language", "eng");
+
+const response = await fetch("/api/ocr/pdf", {
+  method: "POST",
+  headers: { "X-API-Key": "your-key" },
+  body: form
+});
+
+if (!response.ok) {
+  throw new Error(await response.text());
+}
+
+const blob = await response.blob();
+const url = URL.createObjectURL(blob);
+const link = document.createElement("a");
+link.href = url;
+link.download = "searchable.pdf";
+link.click();
+URL.revokeObjectURL(url);
+```
+
+## Searchable PDF Response
+
+The response is a binary PDF stream:
+
+- `Content-Type: application/pdf`
+- `Content-Disposition: attachment; filename="document-searchable.pdf"`
+- body: raw PDF bytes
+
 ## Example Response
 
 ### Success Response (200 OK)
@@ -126,7 +204,7 @@ for page in result['pages']:
 
 ```json
 {
-  "error": "Language is required",
+  "error": "Invalid language format: eng/fra. Expected format: 'eng', 'eng+fra', etc.",
   "statusCode": 400
 }
 ```
