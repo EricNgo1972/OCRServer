@@ -108,6 +108,12 @@ jobs:
           /p:Version=${{ inputs.version }}
           --output ${{ steps.vars.outputs.package_dir }}
 
+      - name: Verify publish output
+        run: |
+          set -euo pipefail
+          test -d "${{ steps.vars.outputs.package_dir }}"
+          find "${{ steps.vars.outputs.package_dir }}" -maxdepth 2 -type f | sort | sed -n '1,200p'
+
       - name: Package Windows release
         if: ${{ inputs.target_os == 'windows' }}
         shell: bash
@@ -115,6 +121,7 @@ jobs:
           set -euo pipefail
           cd release
           zip -r "${{ steps.vars.outputs.archive_name }}" "$(basename "${{ steps.vars.outputs.package_dir }}")"
+          test -f "${{ steps.vars.outputs.archive_name }}"
 
       - name: Package Linux release
         if: ${{ inputs.target_os == 'linux' }}
@@ -123,6 +130,20 @@ jobs:
           set -euo pipefail
           cd release
           tar -czf "${{ steps.vars.outputs.archive_name }}" "$(basename "${{ steps.vars.outputs.package_dir }}")"
+          test -f "${{ steps.vars.outputs.archive_name }}"
+
+      - name: Verify package archive
+        run: |
+          set -euo pipefail
+          ls -lah release
+          test -f "release/${{ steps.vars.outputs.archive_name }}"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.vars.outputs.archive_name }}
+          path: release/${{ steps.vars.outputs.archive_name }}
+          if-no-files-found: error
 
       - name: Create or update GitHub release
         env:
