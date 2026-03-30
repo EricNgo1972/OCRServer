@@ -33,7 +33,7 @@ jobs:
           - target: windows
             rid: win-x64
             os: windows-latest
-    if: ${{ inputs.target == 'both' || inputs.target == matrix.target }}
+    if: ${{ inputs.target == 'both' || inputs.target == 'windows' }}
 
     steps:
       - name: Checkout
