@@ -22,6 +22,9 @@ jobs:
   release-package:
     name: Create Release Package
     runs-on: ubuntu-latest
+    env:
+      PROJECT_PATH: OCRServer.csproj
+      NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
 
     steps:
       - name: Checkout
@@ -66,15 +69,39 @@ jobs:
           echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
           echo "release_name=OCRServer v${VERSION}" >> "$GITHUB_OUTPUT"
 
+      - name: Create isolated NuGet config
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > "$RUNNER_TEMP/NuGet.config" <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <configuration>
+            <packageSources>
+              <clear />
+              <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+              <add key="spc" value="https://spcnugets20200103080220.azurewebsites.net/nuget" />
+            </packageSources>
+          </configuration>
+          EOF
+
       - name: Restore
-        run: dotnet restore OCRServer.sln
+        timeout-minutes: 10
+        run: >
+          dotnet restore ${{ env.PROJECT_PATH }}
+          --configfile "$RUNNER_TEMP/NuGet.config"
+          --runtime ${{ steps.vars.outputs.runtime }}
+          --disable-parallel
+          --ignore-failed-sources
+          /p:NuGetAudit=false
 
       - name: Publish
         run: >
-          dotnet publish Api/Api.csproj
+          dotnet publish ${{ env.PROJECT_PATH }}
           --configuration Release
           --runtime ${{ steps.vars.outputs.runtime }}
           --self-contained false
+          --no-restore
           /p:Version=${{ inputs.version }}
           --output ${{ steps.vars.outputs.package_dir }}
 
