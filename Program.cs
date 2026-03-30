@@ -1,4 +1,4 @@
-using Microsoft.OpenApi.Models;
+    using Microsoft.OpenApi.Models;
 using OCRServer.Middleware;
 using OCRServer.Ocr;
 using OCRServer.Processing;
@@ -45,6 +45,8 @@ builder.Services.AddSwaggerGen(options =>
 builder.Services.AddSingleton<ApiKeyStore>();
 builder.Services.AddSingleton<PdfInfoPageCounter>();
 builder.Services.AddSingleton<OcrDashboardMetrics>();
+builder.Services.AddSingleton<PdfTextLayerDetector>();
+builder.Services.AddSingleton<PdfMergeService>();
 
 builder.Services.AddRateLimiter(options =>
 {
@@ -74,12 +76,15 @@ if (OperatingSystem.IsLinux())
 {
     builder.Services.AddSingleton<PdfTextExtractor>();
     builder.Services.AddSingleton<IOcrService, LinuxOcrService>();
+    builder.Services.AddSingleton<ISearchablePdfService, LinuxSearchablePdfService>();
     builder.Services.AddSingleton<PdftoppmPdfRenderer>();
 }
 else
 {
     builder.Services.AddSingleton<IOcrService, WindowsOcrService>();
+    builder.Services.AddSingleton<ISearchablePdfService, WindowsSearchablePdfService>();
     builder.Services.AddSingleton<IPdfRenderer, PdfiumPdfRenderer>();
+    builder.Services.AddSingleton<WindowsPdfPageImageRenderer>();
     builder.Services.AddSingleton<ImagePreprocessor>();
     builder.Services.AddSingleton<DeskewHelper>();
 }
@@ -345,7 +350,7 @@ app.MapGet("/dashboard", () =>
 <div class="shell">
     <section class="hero">
         <div class="panel hero-copy">
-            <h1>OCR Dashboard</h1>
+            <h1>SPC OCR server</h1>
             <p>Operational totals for the OCR service. The counters below are cumulative for the current app process and update from live request traffic.</p>
             <div class="hero-badges">
                 <span class="badge">Public dashboard</span>

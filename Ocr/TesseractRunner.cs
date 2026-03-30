@@ -12,6 +12,8 @@ namespace OCRServer.Ocr;
 public class TesseractRunner
 {
     private readonly string _tessdataPath;
+    private readonly string? _cliTessdataPath;
+    private readonly string _tesseractExecutablePath;
     private readonly ILogger<TesseractRunner> _logger;
 
     public TesseractRunner(IConfiguration configuration, ILogger<TesseractRunner> logger)
@@ -20,6 +22,8 @@ public class TesseractRunner
         _logger = logger;
 
         _tessdataPath = ResolveTessdataPath(configuredPath);
+        _tesseractExecutablePath = ResolveTesseractExecutablePath();
+        _cliTessdataPath = ResolveCliTessdataPath(_tessdataPath);
 
         // Verify tessdata path exists
         if (!Directory.Exists(_tessdataPath))
@@ -70,6 +74,74 @@ public class TesseractRunner
         }
 
         return configuredPath;
+    }
+
+    private string? ResolveCliTessdataPath(string preferredPath)
+    {
+        if (HasCliPdfConfig(preferredPath))
+            return preferredPath;
+
+        if (OperatingSystem.IsWindows())
+        {
+            var executableDirectory = Path.GetDirectoryName(_tesseractExecutablePath);
+            if (!string.IsNullOrWhiteSpace(executableDirectory))
+            {
+                var adjacentTessdata = Path.Combine(executableDirectory, "tessdata");
+                if (HasCliPdfConfig(adjacentTessdata))
+                    return adjacentTessdata;
+            }
+        }
+
+        return Directory.Exists(preferredPath) ? preferredPath : null;
+    }
+
+    private static bool HasCliPdfConfig(string? tessdataPath)
+    {
+        if (string.IsNullOrWhiteSpace(tessdataPath) || !Directory.Exists(tessdataPath))
+            return false;
+
+        var configsPdf = Path.Combine(tessdataPath, "configs", "pdf");
+        var legacyConfigsPdf = Path.Combine(tessdataPath, "tessconfigs", "pdf");
+        var pdfFont = Path.Combine(tessdataPath, "pdf.ttf");
+
+        return (File.Exists(configsPdf) || File.Exists(legacyConfigsPdf)) && File.Exists(pdfFont);
+    }
+
+    private string ResolveTesseractExecutablePath()
+    {
+        if (!OperatingSystem.IsWindows())
+            return "tesseract";
+
+        var candidates = new List<string?>
+        {
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Tesseract-OCR", "tesseract.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Tesseract-OCR", "tesseract.exe"),
+            "tesseract.exe",
+            "tesseract"
+        };
+
+        foreach (var candidate in candidates)
+        {
+            if (string.IsNullOrWhiteSpace(candidate))
+                continue;
+
+            if (candidate.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+            {
+                if (Path.IsPathRooted(candidate))
+                {
+                    if (File.Exists(candidate))
+                        return candidate;
+                }
+                else
+                {
+                    return candidate;
+                }
+            }
+            else if (!Path.IsPathRooted(candidate))
+                return candidate;
+        }
+
+        return "tesseract.exe";
     }
 
     /// <summary>
@@ -188,35 +260,109 @@ public class TesseractRunner
         }, cancellationToken);
     }
 
+    [SupportedOSPlatform("linux")]
+    [SupportedOSPlatform("windows")]
+    public async Task GenerateSearchablePdfAsync(string imagePath, string language, string outputPdfPath, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(imagePath))
+            throw new ArgumentException("Image path is required", nameof(imagePath));
+
+        if (string.IsNullOrWhiteSpace(outputPdfPath))
+            throw new ArgumentException("Output PDF path is required", nameof(outputPdfPath));
+
+        if (!File.Exists(imagePath))
+            throw new FileNotFoundException("Image file not found", imagePath);
+
+        var outputDirectory = Path.GetDirectoryName(outputPdfPath);
+        if (string.IsNullOrWhiteSpace(outputDirectory))
+            throw new ArgumentException("Output PDF path must include a directory.", nameof(outputPdfPath));
+
+        Directory.CreateDirectory(outputDirectory);
+
+        var outputBase = Path.GetFileNameWithoutExtension(outputPdfPath);
+        await RunTesseractCliAsync(
+            imagePath,
+            language,
+            dpi: 300,
+            outputBase,
+            outputFormat: "pdf",
+            workingDirectory: outputDirectory,
+            cancellationToken);
+
+        if (File.Exists(outputPdfPath))
+            return;
+
+        var expectedBaseName = Path.GetFileNameWithoutExtension(outputPdfPath);
+        var discoveredPdf = Directory
+            .EnumerateFiles(outputDirectory, "*.pdf", SearchOption.TopDirectoryOnly)
+            .FirstOrDefault(path => string.Equals(
+                Path.GetFileNameWithoutExtension(path),
+                expectedBaseName,
+                StringComparison.OrdinalIgnoreCase));
+
+        if (!string.IsNullOrWhiteSpace(discoveredPdf))
+        {
+            if (!string.Equals(discoveredPdf, outputPdfPath, StringComparison.OrdinalIgnoreCase))
+                File.Move(discoveredPdf, outputPdfPath, overwrite: true);
+
+            return;
+        }
+
+        var discoveredFiles = string.Join(", ", Directory.EnumerateFiles(outputDirectory, "*", SearchOption.TopDirectoryOnly).Select(Path.GetFileName));
+        throw new InvalidOperationException($"Tesseract completed but did not produce expected PDF output: {outputPdfPath}. Files found: {discoveredFiles}");
+    }
+
     /// <summary>
     /// Linux-only: runs `tesseract` external process and returns extracted text.
     /// </summary>
-    private async Task<string> RunTesseractCliAsync(string imagePath, string language, int dpi, CancellationToken cancellationToken)
+    private async Task<string> RunTesseractCliAsync(
+        string imagePath,
+        string language,
+        int dpi,
+        CancellationToken cancellationToken)
+        => await RunTesseractCliAsync(
+            imagePath,
+            language,
+            dpi,
+            outputBaseOrStdout: "stdout",
+            outputFormat: null,
+            workingDirectory: null,
+            cancellationToken);
+
+    private async Task<string> RunTesseractCliAsync(
+        string imagePath,
+        string language,
+        int dpi,
+        string outputBaseOrStdout,
+        string? outputFormat,
+        string? workingDirectory,
+        CancellationToken cancellationToken)
     {
-        var args = new List<string>
-        {
-            Quote(imagePath),
-            "stdout",
-            "-l", language,
-            "--dpi", dpi.ToString()
-        };
-
-        // If we have a valid tessdata directory (bundled or configured), pass it explicitly.
-        if (Directory.Exists(_tessdataPath))
-        {
-            args.Add("--tessdata-dir");
-            args.Add(Quote(_tessdataPath));
-        }
-
         var psi = new ProcessStartInfo
         {
-            FileName = "tesseract",
-            Arguments = string.Join(' ', args),
+            FileName = _tesseractExecutablePath,
             UseShellExecute = false,
-            RedirectStandardOutput = true,
+            RedirectStandardOutput = outputBaseOrStdout == "stdout",
             RedirectStandardError = true,
-            CreateNoWindow = true
+            CreateNoWindow = true,
+            WorkingDirectory = string.IsNullOrWhiteSpace(workingDirectory) ? Environment.CurrentDirectory : workingDirectory
         };
+
+        psi.ArgumentList.Add(imagePath);
+        psi.ArgumentList.Add(outputBaseOrStdout);
+        psi.ArgumentList.Add("-l");
+        psi.ArgumentList.Add(language);
+        psi.ArgumentList.Add("--dpi");
+        psi.ArgumentList.Add(dpi.ToString());
+
+        if (Directory.Exists(_cliTessdataPath))
+        {
+            psi.ArgumentList.Add("--tessdata-dir");
+            psi.ArgumentList.Add(_cliTessdataPath!);
+        }
+
+        if (!string.IsNullOrWhiteSpace(outputFormat))
+            psi.ArgumentList.Add(outputFormat);
 
         using var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
         try
@@ -226,12 +372,18 @@ public class TesseractRunner
         }
         catch (Win32Exception ex)
         {
+            var hint = OperatingSystem.IsWindows()
+                ? "tesseract CLI was not found. Install Tesseract OCR for Windows and ensure tesseract.exe is available at C:\\Program Files\\Tesseract-OCR\\tesseract.exe or on PATH."
+                : "tesseract CLI was not found. Install it (Ubuntu/Debian: `sudo apt-get install -y tesseract-ocr`).";
+
             throw new InvalidOperationException(
-                "tesseract CLI was not found. Install it (Ubuntu/Debian: `sudo apt-get install -y tesseract-ocr`).",
+                hint,
                 ex);
         }
 
-        var stdoutTask = proc.StandardOutput.ReadToEndAsync(cancellationToken);
+        Task<string>? stdoutTask = psi.RedirectStandardOutput
+            ? proc.StandardOutput.ReadToEndAsync(cancellationToken)
+            : null;
         var stderrTask = proc.StandardError.ReadToEndAsync(cancellationToken);
 
         try
@@ -244,7 +396,7 @@ public class TesseractRunner
             throw;
         }
 
-        var stdout = await stdoutTask;
+        var stdout = stdoutTask == null ? "" : await stdoutTask;
         var stderr = await stderrTask;
 
         if (proc.ExitCode != 0)
@@ -258,9 +410,6 @@ public class TesseractRunner
 
         return stdout ?? "";
     }
-
-    private static string Quote(string s) => s.Contains(' ') ? $"\"{s}\"" : s;
-
     private static void TryKill(Process proc)
     {
         try

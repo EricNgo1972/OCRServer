@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using UglyToad.PdfPig;
 
 namespace OCRServer.Services;
 
@@ -18,6 +19,9 @@ public sealed class PdfInfoPageCounter
     public async Task<int> GetPageCountAsync(IFormFile pdfFile, CancellationToken cancellationToken)
     {
         if (pdfFile == null) throw new ArgumentNullException(nameof(pdfFile));
+
+        if (OperatingSystem.IsWindows())
+            return await GetPageCountWithPdfPigAsync(pdfFile, cancellationToken);
 
         var tempRoot = Path.Combine(Path.GetTempPath(), "ocrserver-pdfinfo", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempRoot);
@@ -49,9 +53,8 @@ public sealed class PdfInfoPageCounter
             }
             catch (Win32Exception ex)
             {
-                throw new InvalidOperationException(
-                    "pdfinfo was not found. Install Poppler utilities (Ubuntu/Debian: `sudo apt-get install -y poppler-utils`).",
-                    ex);
+                _logger.LogWarning(ex, "pdfinfo was not found. Falling back to managed PDF page counting.");
+                return await GetPageCountWithPdfPigAsync(pdfFile, cancellationToken);
             }
 
             var stdoutTask = proc.StandardOutput.ReadToEndAsync(cancellationToken);
@@ -71,13 +74,16 @@ public sealed class PdfInfoPageCounter
             var stderr = await stderrTask;
 
             if (proc.ExitCode != 0)
-                throw new InvalidOperationException($"pdfinfo failed with exit code {proc.ExitCode}. stderr: {Trim(stderr)}");
+            {
+                _logger.LogWarning("pdfinfo failed with exit code {Code}. Falling back to managed PDF page counting. stderr={Stderr}", proc.ExitCode, Trim(stderr));
+                return await GetPageCountWithPdfPigAsync(pdfFile, cancellationToken);
+            }
 
             var pages = ParsePages(stdout);
             if (pages <= 0)
             {
                 _logger.LogWarning("pdfinfo output did not contain a valid Pages count. stdout={Stdout}", Trim(stdout));
-                throw new InvalidOperationException("Could not determine PDF page count (pdfinfo output missing 'Pages:').");
+                return await GetPageCountWithPdfPigAsync(pdfFile, cancellationToken);
             }
 
             return pages;
@@ -86,6 +92,22 @@ public sealed class PdfInfoPageCounter
         {
             TryDeleteDirectory(tempRoot);
         }
+    }
+
+    private static async Task<int> GetPageCountWithPdfPigAsync(IFormFile pdfFile, CancellationToken cancellationToken)
+    {
+        await using var stream = pdfFile.OpenReadStream();
+        using var memory = new MemoryStream();
+        await stream.CopyToAsync(memory, cancellationToken);
+        memory.Position = 0;
+
+        using var document = PdfDocument.Open(memory);
+        var pages = document.NumberOfPages;
+
+        if (pages <= 0)
+            throw new InvalidOperationException("Could not determine PDF page count.");
+
+        return pages;
     }
 
     private static int ParsePages(string stdout)

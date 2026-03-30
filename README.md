@@ -59,6 +59,24 @@ Public utility routes:
 }
 ```
 
+### POST /api/Ocr/pdf
+
+Creates a searchable PDF from an uploaded PDF.
+
+**Headers**: `X-API-Key: <key>` (required)
+
+**Content-Type**: `multipart/form-data`
+
+**Form fields**:
+- `file` (required): PDF file
+- `language` (optional): Tesseract code(s), e.g. `eng`, `eng+fra`, `eng+vie`. Defaults to `eng+fra` when omitted
+- `profile` (optional): accepted for compatibility; ignored by searchable PDF generation
+
+**Response**:
+- `Content-Type: application/pdf`
+- body: binary PDF stream
+- filename: returned via `Content-Disposition`
+
 ## Internal Security (API Keys, Rate Limiting, Concurrency)
 
 Request pipeline order:
@@ -89,57 +107,116 @@ Configure in `appsettings.json` (loaded once at startup):
 
 Every OCR request is logged: `OCR | client=warehouse-app | pages=4 | size=2.3MB | ms=1820 | status=200 | ok`
 
-## Running in WSL (Linux)
+## Deployment
 
-On Linux/WSL the pipeline is **pdftoppm → Tesseract CLI** (no OpenCV, no PDFium).
+This service has different runtime dependencies on Windows and Linux.
 
-**Note:** Build the *project*, not the solution: `dotnet build OCRServer.csproj -r linux-x64` or `.\scripts\build-wsl.ps1`.
+- **Windows**:
+  - `/api/ocr` uses PDFium + OpenCvSharp + the .NET Tesseract wrapper
+  - `/api/ocr/pdf` uses `tesseract.exe` CLI to generate searchable PDFs
+- **Linux**:
+  - `/api/ocr` and `/api/ocr/pdf` use Poppler tools + Tesseract CLI
 
-### Install system libraries (WSL / Ubuntu/Debian)
+### Windows Deployment
 
-From project root in WSL:
+Required components:
 
-```bash
-bash scripts/setup-wsl-deps.sh
+- .NET 8 runtime or SDK
+- Tesseract language data (`tessdata/`) available either:
+  - bundled with the app output, or
+  - installed system-wide and configured via `Ocr:TesseractDataPath`
+- For `POST /api/ocr/pdf`: `tesseract.exe` must be installed and launchable by the app
+
+Recommended Tesseract install path:
+
+```text
+C:\Program Files\Tesseract-OCR\tesseract.exe
 ```
 
-Or manually:
+Build and run:
+
+```powershell
+dotnet restore
+dotnet build OCRServer.csproj -c Release
+dotnet run --project OCRServer.csproj
+```
+
+Quick verification:
+
+```powershell
+where.exe tesseract
+```
+
+If `where.exe tesseract` returns no path, `/api/ocr/pdf` will fail even if `/api/ocr` works.
+
+### Linux Deployment
+
+Required components:
+
+- .NET 8 runtime or SDK
+- `tesseract-ocr`
+- `poppler-utils`
+- `libtesseract-dev`
+- `libleptonica-dev`
+- optional system language packs if you are not using the bundled `tessdata/`
+
+Install on Ubuntu/Debian:
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y poppler-utils tesseract-ocr libtesseract-dev libleptonica-dev
 ```
 
-- **poppler-utils**: `pdftoppm` (PDF → images)
-- **tesseract-ocr** + **libtesseract-dev** / **libleptonica-dev**: Tesseract CLI and libs. On Ubuntu 24.04+, the setup script creates a `libtesseract.so.4` symlink for compatibility.
+Or from project root:
 
-Language packs (e.g. `tesseract-ocr-eng`, `tesseract-ocr-fra`) are optional if you use bundled tessdata.
+```bash
+bash scripts/setup-wsl-deps.sh
+```
 
-### Run from Windows
+What these provide:
+
+- `poppler-utils`: `pdftoppm`, `pdftotext`, `pdfinfo`
+- `tesseract-ocr`: Tesseract CLI used for OCR and searchable PDF generation
+- `libtesseract-dev` / `libleptonica-dev`: native runtime libraries required by the app
+
+Build and run:
+
+```bash
+dotnet restore
+dotnet build OCRServer.csproj -c Release -r linux-x64
+dotnet run --project OCRServer.csproj
+```
+
+Quick verification:
+
+```bash
+which tesseract
+which pdftoppm
+which pdftotext
+which pdfinfo
+```
+
+### WSL Development
+
+On Linux/WSL the runtime pipeline is **pdftoppm → Tesseract CLI**.
+
+Run from Windows:
 
 ```powershell
 .\scripts\run-wsl.ps1
 ```
 
-### Run from inside WSL
+Run from inside WSL:
 
 ```bash
 cd "/mnt/c/Business Solutions/OCR Server"
 dotnet run
 ```
 
-### Visual Studio 2022
+Visual Studio 2022:
 
 1. Build for Linux: `dotnet build OCRServer.csproj -r linux-x64`
-2. Set launch profile to **WSL**, then F5 (or Ctrl+F5 to avoid rebuild).
-
-## Building
-
-```bash
-dotnet restore
-dotnet build --configuration Release
-dotnet run
-```
+2. Set launch profile to **WSL**, then F5 (or Ctrl+F5 to avoid rebuild)
 
 ## Configuration
 
@@ -181,6 +258,19 @@ $form = @{
 }
 $headers = @{ "X-API-Key" = "your-key" }
 Invoke-RestMethod -Uri $uri -Method Post -Form $form -Headers $headers
+```
+
+### Searchable PDF Download
+
+```powershell
+$uri = "http://localhost:5000/api/ocr/pdf"
+$form = @{
+    file = Get-Item "document.pdf"
+    language = "eng"
+}
+$headers = @{ "X-API-Key" = "your-key" }
+
+Invoke-WebRequest -Uri $uri -Method Post -Form $form -Headers $headers -OutFile "searchable.pdf"
 ```
 
 ## Docker (Linux target)

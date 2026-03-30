@@ -61,8 +61,13 @@ internal static class OcrEndpointMatcher
         if (!HttpMethods.IsPost(context.Request.Method))
             return false;
 
-        // Controller route: /api/Ocr
-        return context.Request.Path.Equals("/api/Ocr", StringComparison.OrdinalIgnoreCase);
+        return IsJsonOcrRequest(context) || IsSearchablePdfRequest(context);
     }
+
+    internal static bool IsJsonOcrRequest(HttpContext context)
+        => context.Request.Path.Equals("/api/Ocr", StringComparison.OrdinalIgnoreCase);
+
+    internal static bool IsSearchablePdfRequest(HttpContext context)
+        => context.Request.Path.Equals("/api/Ocr/pdf", StringComparison.OrdinalIgnoreCase);
 }
 

@@ -87,6 +87,14 @@ public sealed class OcrRequestValidationMiddleware
         var contentType = file.ContentType?.ToLowerInvariant() ?? "";
         var isPdf = contentType.Contains("pdf") || fileName.EndsWith(".pdf");
 
+        if (OcrEndpointMatcher.IsSearchablePdfRequest(context) && !isPdf)
+        {
+            context.Items[HttpContextItemKeys.OcrRejectedReason] = "searchable_pdf_requires_pdf";
+            context.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await context.Response.WriteAsJsonAsync(new { error = "The searchable PDF endpoint only accepts PDF files." });
+            return;
+        }
+
         int pages = 1;
         if (isPdf)
         {
