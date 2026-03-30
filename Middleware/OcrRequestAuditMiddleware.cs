@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using OCRServer.Security;
+using OCRServer.Services;
 
 namespace OCRServer.Middleware;
 
@@ -9,11 +10,16 @@ namespace OCRServer.Middleware;
 public sealed class OcrRequestAuditMiddleware
 {
     private readonly RequestDelegate _next;
+    private readonly OcrDashboardMetrics _metrics;
     private readonly ILogger<OcrRequestAuditMiddleware> _logger;
 
-    public OcrRequestAuditMiddleware(RequestDelegate next, ILogger<OcrRequestAuditMiddleware> logger)
+    public OcrRequestAuditMiddleware(
+        RequestDelegate next,
+        OcrDashboardMetrics metrics,
+        ILogger<OcrRequestAuditMiddleware> logger)
     {
         _next = next;
+        _metrics = metrics;
         _logger = logger;
     }
 
@@ -26,6 +32,7 @@ public sealed class OcrRequestAuditMiddleware
         }
 
         var sw = Stopwatch.StartNew();
+        _metrics.RecordRequestSubmitted();
 
         try
         {
@@ -53,6 +60,10 @@ public sealed class OcrRequestAuditMiddleware
             };
 
             var reason = context.Items.TryGetValue(HttpContextItemKeys.OcrRejectedReason, out var r) ? r as string : null;
+            var isSuccess = status == StatusCodes.Status200OK;
+            var hasDocument = sizeBytes.HasValue && sizeBytes.Value > 0;
+
+            _metrics.RecordRequestOutcome(isSuccess, hasDocument, pages);
 
             _logger.LogInformation(
                 "OCR | client={Client} | pages={Pages} | size={SizeMb}MB | ms={Ms} | status={Status} | {Result}{Reason}",

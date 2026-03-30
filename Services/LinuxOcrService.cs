@@ -36,6 +36,10 @@ public sealed class LinuxOcrService : IOcrService
 
         try
         {
+            request.Language = string.IsNullOrWhiteSpace(request.Language)
+                ? OcrRequest.DefaultLanguage
+                : request.Language;
+
             var profile = OcrServiceHelpers.ParseProfile(request.Profile); // parsed for API compatibility; not used on Linux
             _ = profile;
 
@@ -156,6 +160,8 @@ internal static class OcrServiceHelpers
 {
     internal static string NormalizeLanguage(string language)
     {
+        language = System.Text.RegularExpressions.Regex.Replace(language, @"[\s,;|/\\]+", "+");
+
         static string MapOne(string part)
         {
             var p = part.Trim().ToLowerInvariant();
@@ -198,4 +204,3 @@ internal static class OcrServiceHelpers
             throw new ArgumentException($"Invalid language format: {language}. Expected format: 'eng', 'eng+fra', etc.", nameof(language));
     }
 }
-

@@ -11,6 +11,8 @@ curl -X POST http://localhost:5000/api/ocr \
   -F "profile=scan"
 ```
 
+If `language` is omitted from the multipart form body, the API defaults to `eng+fra`.
+
 ### PowerShell
 
 ```powershell
@@ -126,7 +128,7 @@ for page in result['pages']:
 
 ```json
 {
-  "error": "Language is required",
+  "error": "Invalid language format: eng/fra. Expected format: 'eng', 'eng+fra', etc.",
   "statusCode": 400
 }
 ```

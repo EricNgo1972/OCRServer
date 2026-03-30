@@ -21,6 +21,8 @@ SERVICE_NAME="ocr.service"   # <-- change if your service name differs
 echo "🚀 Deploying OCR Server to ${TARGET_HOST}..."
 
 rsync -rz --delete \
+  --exclude "appsettings.json"\
+  --exclude "appsettings.*.json"\
   --no-perms \
   --no-times \
   --no-group \

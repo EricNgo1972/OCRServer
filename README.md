@@ -22,9 +22,17 @@ Production-grade OCR microservice for ERP systems. Built with .NET 8 and Tessera
 - **PDF support**: Renders PDF pages to images (pdftoppm on Linux, PDFium on Windows)
 - **Processing profiles** (Windows only): `scan`, `photo`, `fast`
 - **Internal security**: API key auth, per-key rate and concurrency limits, size/page validation
+- **Operations dashboard**: Public `/dashboard` page with live in-memory request totals
+- **Swagger UI**: Public `/swagger` page with `X-API-Key` header support for testing
 - **Stateless**: No database, no session state
 
 ## API Endpoint
+
+Public utility routes:
+- `GET /` redirects to `/dashboard`
+- `GET /dashboard` shows request counters
+- `GET /dashboard/stats` returns the dashboard totals as JSON
+- `GET /swagger` opens the Swagger UI
 
 ### POST /api/Ocr
 
@@ -32,9 +40,9 @@ Production-grade OCR microservice for ERP systems. Built with .NET 8 and Tessera
 
 **Content-Type**: `multipart/form-data`
 
-**Parameters**:
+**Form fields**:
 - `file` (required): PDF, PNG, or JPG file
-- `language` (required): Tesseract code(s), e.g. `eng`, `eng+fra`, `eng+vie`
+- `language` (optional): Tesseract code(s), e.g. `eng`, `eng+fra`, `eng+vie`. Defaults to `eng+fra` when omitted
 - `profile` (optional): Preprocessing profile — `scan`, `photo`, `fast` (Windows only; default `scan`)
 
 **Response**:
