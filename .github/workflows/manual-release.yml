@@ -33,7 +33,7 @@ jobs:
             os: ubuntu-latest
           - target: windows
             rid: win-x64
-            os: windows-latest
+            os: windows-latest  
 
     steps:
       - name: Skip if not selected
